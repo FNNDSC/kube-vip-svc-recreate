@@ -14,3 +14,10 @@ figment = { version = "0.10.19", features = ["env"] }
 humantime-serde = "1.1.1"
 hickory-resolver = "0.24.4"
 either = { version = "1.15.0", features = ["use_std"] }
+
+# https://github.com/johnthagen/min-sized-rust
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true
+codegen-units = 1
