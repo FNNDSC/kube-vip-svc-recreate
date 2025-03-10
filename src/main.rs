@@ -1,12 +1,13 @@
 use crate::dns::get_resolver;
 use crate::k8s::{get_vip_services, recreate_service};
 use crate::settings::Settings;
+use dns::{bubble_ips, poll_until_exists};
 use figment::providers::Env;
 use hickory_resolver::TokioAsyncResolver;
-use hickory_resolver::error::ResolveErrorKind;
 use k8s_openapi::api::core::v1::Service;
 use kube::ResourceExt;
 
+mod constants;
 mod dns;
 mod k8s;
 mod settings;
@@ -45,43 +46,60 @@ async fn check_and_repair(
         .annotations
         .as_ref()
         .and_then(|a| a.get(&settings.vip_annotation))
-        .unwrap();
-    match resolver.ipv4_lookup(host).await {
-        Ok(lookup) => {
-            let ip = lookup
-                .iter()
-                .map(|a| format!("{:?}", a.0))
-                .collect::<Vec<_>>()
-                .join(",");
+        .unwrap()
+        .to_string();
+    let name = service.name_any();
+    if let Some(ips) = bubble_ips(resolver.ipv4_lookup(&host).await).unwrap() {
+        tracing::info!(
+            namespace = service.namespace(),
+            service = &name,
+            hostname = host,
+            ipv4_address = ips,
+            "DHCP is healthy"
+        );
+    } else {
+        tracing::warn!(
+            namespace = service.namespace(),
+            service = service.name_any(),
+            hostname = host,
+            "Unresolved host, will try to fix."
+        );
+        let client = api.clone().into_client();
+        let service = recreate_service(client, service).await.unwrap();
+        if let Some(ips) = poll_until_exists(
+            resolver,
+            &host,
+            settings.check_timeout,
+            settings.check_interval,
+        )
+        .await
+        .unwrap()
+        {
             tracing::info!(
                 namespace = service.namespace(),
-                name = service.name_any(),
+                service = &name,
                 hostname = host,
-                ipv4_address = ip,
-                "DHCP is healthy"
-            )
-        }
-        Err(e) => {
-            if matches!(e.kind(), ResolveErrorKind::NoRecordsFound { .. }) {
-                tracing::warn!(
-                    namespace = service.namespace(),
-                    name = service.name_any(),
-                    hostname = host,
-                    "Unresolved host, will try to fix."
-                );
-                let _service = recreate_service(&api, service).await.unwrap();
-                // and then we poll DNS until the service reappears...
-            } else {
-                panic!("Unhandled error: {:?}", e)
-            }
+                ipv4_address = ips,
+                "Successfully restored."
+            );
+        } else {
+            tracing::error!(
+                namespace = service.namespace(),
+                service = &name,
+                hostname = host,
+                "Hostname still unresolved after service was recreated."
+            );
+            panic!("Failed to restore functionality for svc/{name}");
         }
     }
 }
 
 fn init_tracing_subscriber() -> Result<(), tracing::dispatcher::SetGlobalDefaultError> {
+    let filter = tracing_subscriber::EnvFilter::from_default_env()
+        .add_directive(tracing_subscriber::filter::LevelFilter::INFO.into());
     tracing::subscriber::set_global_default(
         tracing_subscriber::FmtSubscriber::builder()
-            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_env_filter(filter)
             .finish(),
     )
 }

@@ -40,7 +40,7 @@ fn default_check_interval() -> Duration {
 }
 
 fn default_check_timeout() -> Duration {
-    Duration::from_secs(60)
+    Duration::from_secs(120)
 }
 
 fn loadbalancer_hostname() -> String {

@@ -13,3 +13,4 @@ serde = "1.0.218"
 figment = { version = "0.10.19", features = ["env"] }
 humantime-serde = "1.1.1"
 hickory-resolver = "0.24.4"
+either = { version = "1.15.0", features = ["use_std"] }
