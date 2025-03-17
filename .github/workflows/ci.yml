@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-rust:
+    name: Build Rust binary
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        target:
+        - x86_64-unknown-linux-musl
+    steps:
+    - uses: actions/checkout@v4
+    - name: Cache rust build
+      uses: Swatinem/rust-cache@f0deed1e0edfc6a9be95417288c0e1099b1eeec3  # v2.7.7
+    - name: Build
+      uses: houseabsolute/actions-rust-cross@e2ab1c383646cf01240677290e926946f490acf1  # v1.0.3
+      with:
+        target: ${{ matrix.target }}
+        command: build
+        args: --release --locked
+    - name: Move binary
+      run: |
+        mkdir dist
+        mv target/${{ matrix.target }}/release/kube-vip-svc-recreate dist/kube-vip-svc-recreate
+    - name: Calculate checksum
+      run: |
+        cd dist
+        sha256 kube-vip-svc-recreate | tee kube-vip-svc-recreate.sha256sum
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: 'build__${{ matrix.target }}'
+        path: dist
+        if-no-files-found: 'error'
+  build-docker:
+    name: Build container image
+    runs-on: ubuntu-24.04
+    needs: [ build-rust ]
+    steps:
+    - name: Download x86_64 binary
+      uses: actions/download-artifact@v4
+    - name: Print out all files
+      run: find -type f
+    - name: Print expected checksums
+      run: find -type f -name '*.sha256sum' -exec sh -c 'echo {} && cat {}' \;
+    - name: Calculate actual checksums
+      run: find -type f -name 'kube-vip-svc-recreate' -exec sha256sum '{}' \;
+    - name: Move binaries and mark executable
+      run: |
+        mkdir -vp dist/linux/amd64
+        mv -v build__x86_64-unknown-linux-musl/kube-vip-svc-recreate dist/linux/amd64/kube-vip-svc-recreate
+        chmod -v 555 dist/linux/amd64/kube-vip-svc-recreate
+    - name: Create Dockerfile
+      run: |
+        cat > Dockerfile << EOF
+        # syntax=docker/dockerfile:1
+        FROM scratch
+        ARG TARGETPLATFORM
+        COPY ./dist/\$TARGETPLATFORM/kube-vip-svc-recreate /kube-vip-svc-recreate
+        CMD ["/kube-vip-svc-recreate"]
+        EOF
+    - uses: docker/metadata-action@v5
+      id: meta
+      with:
+        images: |
+          docker.io/fnndsc/kube-vip-svc-recreate
+          ghcr.io/fnndsc/kube-vip-svc-recreate
+        tags: |
+          type=sha,format=short,prefix=
+          type=raw,value=latest,enable={{is_default_branch}}
+    - uses: docker/setup-buildx-action@v3
+    - name: Login to DockerHub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        password: ${{ secrets.DOCKERHUB_PASSWORD }}
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.repository_owner }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    - name: Build and push
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        push: true
+        file: ./Dockerfile
+        platforms: linux/amd64
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
