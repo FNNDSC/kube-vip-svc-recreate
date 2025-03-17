@@ -50,8 +50,9 @@ pub async fn recreate_service(client: kube::Client, service: Service) -> kube::R
 
 /// Prepare a previously existing kube-vip LoadBalancer service for replacement.
 fn reset(mut service: Service) -> Service {
-    service.metadata.creation_timestamp = None;
     service.metadata.uid = None;
+    service.metadata.creation_timestamp = None;
+    service.metadata.resource_version = None;
     service.status = None;
     // N.B. metadata.resourceVersion is kept because it is required for replace operation.
     // https://docs.rs/kube/0.98.0/kube/api/struct.Api.html#method.replace
@@ -66,6 +67,15 @@ fn reset(mut service: Service) -> Service {
         spec.external_ips = None;
         spec.external_name = None;
         spec.ip_families = None;
+        if let Some(ports) = spec.ports.as_mut() {
+            for port in ports {
+                // NOTE: NodePort remains allocated for a short duration
+                // after its service is deleted, and trying to recreate
+                // the service without changing NodePort causes an error.
+                // Clearing the value of NodePort shouldn't cause harm...
+                port.node_port = None;
+            }
+        }
     }
     service
 }
@@ -75,6 +85,12 @@ async fn delete(api: &Api<Service>, name: &str, namespace: &str) -> kube::Result
         Either::Left(svc) => {
             let uid = Lookup::uid(&svc).unwrap();
             let api = api.clone();
+            tracing::trace!(
+                service = name,
+                namespace = namespace,
+                uid = uid.as_ref(),
+                "Pending deletion"
+            );
             // SMELL: irresponsible .unwrap()
             await_condition(api, name, is_deleted(&uid)).await.unwrap();
         }
