@@ -1,7 +1,5 @@
 # kube-vip DHCP LoadBalancer Recreation Workaround
 
-Requires Kubernetes version 1.28 - 1.32.
-
 We have experienced a spontaneous failure mode with [kube-vip](https://kube-vip.io) version 0.8.9 where the hostname of a `LoadBalancer`-type service using kube-vip's DHCP feature becomes unresolvable. This can be worked around by forcing kube-vip to renew the DHCP lease. The easiest way to do this is by deleting then recreating the service.
 
 This repository implements a simple workaround which deletes then recreates `LoadBalancer`-type services managed by kube-vip as-needed. As pseudocode:
@@ -38,7 +36,8 @@ spec:
         spec:
           containers:
           - name: kube-vip-svc-recreate
-            image: ghcr.io/fnndsc/kube-vip-svc-recreate:9361813
+            image: ghcr.io/fnndsc/kube-vip-svc-recreate:e9c0cd2    # supports Kubernetes v1.30-1.33
+            # image: ghcr.io/fnndsc/kube-vip-svc-recreate:2e056ad  # supports Kubernetes v1.28-1.32
             resources:
               requests:
                 cpu: 50m
